@@ -29,9 +29,9 @@
 - Pull before starting. Commit small and often.
 
 ## Team
-- [Name]: [role, e.g. code / networking]
-- [Name]: [role, e.g. art / animation]
-- [Name]: [role, e.g. design / UI]
+- [Sudama]: [role, e.g. code / networking]
+- [Kevin]: [role, e.g. art / animation]
+- [Lohith]: [role, e.g. design / UI]
 
 ## Current status
 - Project created, pushed to GitHub with LFS, Android build profile set.
