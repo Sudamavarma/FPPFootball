@@ -152,7 +152,7 @@ MonoBehaviour:
   moveSpeed: 6
   gravity: -20
   cameraTransform: {fileID: 330585546}
-  lookSensitivity: 0.1
+  lookSensitivity: 0.2
   maxLookAngle: 80
 --- !u!143 &7439302
 CharacterController:
