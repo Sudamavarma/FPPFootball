@@ -13,7 +13,8 @@ public class FPPPlayerController : MonoBehaviour
     [Header("Look")]
     [SerializeField] private Transform cameraTransform;
     [SerializeField] private float lookSensitivity = 0.1f;          // mouse
-    [SerializeField] private float touchLookSensitivity = 0.15f;    // finger drag, degrees per pixel
+    [Tooltip("Finger drag: degrees turned per inch of finger movement. Higher = faster. Same feel on every phone.")]
+    [SerializeField] private float touchLookDegreesPerInch = 140f;
     [SerializeField] private float maxLookAngle = 80f;
 
     [Header("Cursor (desktop)")]
@@ -28,8 +29,31 @@ public class FPPPlayerController : MonoBehaviour
     /// <summary>Current up/down look angle. PlayerLookAround reads this.</summary>
     public float Pitch => pitch;
 
+    /// <summary>Normal walking speed (metres per second).</summary>
+    public float MoveSpeed => moveSpeed;
+
+    /// <summary>Other scripts can slow or speed the player. 1 = normal.</summary>
+    public float SpeedMultiplier { get; set; } = 1f;
+
+    /// <summary>
+    /// Extra flat velocity added on top of the joystick (used by the Defend match-up button
+    /// to run you toward the ball carrier). PlayerDefending sets this every frame.
+    /// </summary>
+    public Vector3 AssistVelocity { get; set; }
+
     // Mouse locking only makes sense on desktop
     private bool CursorLockActive => lockCursor && !Application.isMobilePlatform;
+
+    // Finger drag arrives in pixels; convert using the screen's density so every phone feels the same
+    private float TouchDegreesPerPixel
+    {
+        get
+        {
+            float dpi = Screen.dpi > 0f ? Screen.dpi : 320f;
+            dpi = Mathf.Clamp(dpi, 120f, 700f);
+            return touchLookDegreesPerInch / dpi;
+        }
+    }
 
     private void Awake()
     {
@@ -37,6 +61,13 @@ public class FPPPlayerController : MonoBehaviour
         input = GetComponent<PlayerInputReader>();
         if (input == null)
             Debug.LogError("FPPPlayerController needs a PlayerInputReader on the same GameObject.", this);
+
+        // Android often runs at 30 fps by default, which makes touch feel laggy and slow
+        if (Application.isMobilePlatform)
+        {
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = 60;
+        }
     }
 
     private void Start()
@@ -66,7 +97,7 @@ public class FPPPlayerController : MonoBehaviour
         if (cameraTransform == null) return;
 
         // Finger drag
-        Vector2 delta = input.ConsumeTouchLook() * touchLookSensitivity;
+        Vector2 delta = input.ConsumeTouchLook() * TouchDegreesPerPixel;
 
         // Mouse (only while the cursor is locked)
         if (Mouse.current != null && Cursor.lockState == CursorLockMode.Locked)
@@ -91,7 +122,13 @@ public class FPPPlayerController : MonoBehaviour
         verticalVelocity += gravity * Time.deltaTime;
 
         float speed = input.SprintHeld ? moveSpeed * sprintMultiplier : moveSpeed;
-        Vector3 velocity = move * speed + Vector3.up * verticalVelocity;
+        speed *= SpeedMultiplier;
+
+        Vector3 horizontal = move * speed + AssistVelocity;
+        float maxSpeed = Mathf.Max(speed, AssistVelocity.magnitude);
+        if (horizontal.magnitude > maxSpeed) horizontal = horizontal.normalized * maxSpeed;
+
+        Vector3 velocity = horizontal + Vector3.up * verticalVelocity;
         controller.Move(velocity * Time.deltaTime);
     }
 
