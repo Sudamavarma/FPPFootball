@@ -3,11 +3,17 @@ using UnityEngine;
 /// <summary>
 /// Defending actions. Active whenever the ball is NOT with you (loose, or with an opponent).
 ///
-/// TACKLE: a quick slide forward. If the ball carrier (or a loose ball) is within reach in front of
-///         you during the slide, you snatch the ball. Cooldown applies. When you get a 3D model,
-///         play the slide animation when StartSlide() runs.
-/// DEFEND: hold it for "match-up", like eFootball: you automatically close in on the ball carrier
-///         (or the loose ball), turn to face them, and keep a short distance. You can still steer a bit.
+/// TACKLE (tap): you slide AT the opponent who has the ball (or at a loose ball nearby) and capture it.
+///   - It picks the target for you: the opponent ball carrier within Tackle Seek Range.
+///   - The body turns to face the target and keeps homing on it during the slide.
+///   - Touch the carrier or the ball (within Capture Reach) and the ball is yours.
+///   - If nobody is in range, nothing happens (and no cooldown is used).
+///   When you add the 3D model, play the slide animation on SlideStarted and stop it on SlideEnded.
+///
+/// DEFEND (hold): you stretch a leg to grab a LOOSE ball that is near you, for example an opponent's
+///   pass in flight, or a shot. If the ball is within Intercept Reach, you capture it.
+///   It does nothing while an opponent is holding the ball (use Tackle for that).
+///   Play your stretch animation on StretchStarted.
 ///
 /// Clear is in PlayerBallInteraction.
 ///
@@ -16,23 +22,32 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public class PlayerDefending : MonoBehaviour
 {
-    [Header("Tackle (slide to snatch the ball)")]
-    [SerializeField] private float slideDistance = 3f;
-    [SerializeField] private float slideSeconds = 0.3f;
-    [Tooltip("How far from you the carrier or ball can be for the tackle to win it (metres).")]
-    [SerializeField] private float tackleReach = 1.8f;
+    [Header("Tackle: slide to the opponent and win the ball")]
+    [Tooltip("An opponent carrier (or a loose ball) farther than this is ignored (metres).")]
+    [SerializeField] private float tackleSeekRange = 6f;
+    [SerializeField] private float slideSpeed = 11f;
+    [SerializeField] private float maxSlideSeconds = 0.7f;
+    [Tooltip("Within this distance of the carrier or the ball, the tackle wins the ball (metres).")]
+    [SerializeField] private float captureReach = 1.2f;
     [SerializeField] private float tackleCooldown = 1.2f;
-    [Tooltip("1 = always wins the ball when in reach. Lower it to make tackles fail sometimes.")]
+    [Tooltip("1 = always wins the ball on contact. Lower it to make tackles fail sometimes.")]
     [Range(0f, 1f)]
     [SerializeField] private float tackleSuccessChance = 1f;
 
-    [Header("Defend (match-up)")]
-    [Tooltip("Match-up running speed as a fraction of your walking speed.")]
-    [SerializeField] private float matchUpSpeedFactor = 0.9f;
-    [Tooltip("How close you stand to a ball carrier while matching up (metres).")]
-    [SerializeField] private float matchUpDistance = 1.6f;
-    [Tooltip("How fast you turn to face the carrier (degrees per second).")]
-    [SerializeField] private float matchUpTurnSpeed = 200f;
+    [Header("Defend: stretch a leg to intercept a loose ball")]
+    [Tooltip("A loose ball closer than this to you can be grabbed (metres).")]
+    [SerializeField] private float interceptReach = 2.6f;
+    [SerializeField] private float interceptMaxHeight = 1.8f;
+    [Tooltip("Faster balls than this cannot be grabbed (metres per second).")]
+    [SerializeField] private float interceptMaxBallSpeed = 20f;
+
+    // Hooks for animations when the 3D player model is added
+    public event System.Action SlideStarted;
+    public event System.Action SlideEnded;
+    public event System.Action BallWon;
+    public event System.Action StretchStarted;
+
+    public bool IsSliding => slideTimeLeft > 0f;
 
     private PlayerInputReader input;
     private PlayerPossession possession;
@@ -44,8 +59,8 @@ public class PlayerDefending : MonoBehaviour
 
     private float slideTimeLeft;
     private float nextTackleTime;
-    private bool tackleResolved;
-    private Vector3 slideDirection;
+    private bool slideResolved;
+    private PlayerTeam slideCarrier;
 
     private void Awake()
     {
@@ -56,6 +71,8 @@ public class PlayerDefending : MonoBehaviour
         mover = GetComponent<FPPPlayerController>();
         if (input == null)
             Debug.LogError("PlayerDefending needs a PlayerInputReader on the same GameObject.", this);
+        if (team == null)
+            Debug.LogWarning("PlayerDefending: add a PlayerTeam to the Player (use FPPFootball > Set Up Possession And Opponent).", this);
     }
 
     private void Start()
@@ -66,7 +83,7 @@ public class PlayerDefending : MonoBehaviour
 
     private void Update()
     {
-        if (input == null) return;
+        if (input == null || team == null || ballOwnership == null || ballBody == null) return;
 
         if (slideTimeLeft > 0f)
         {
@@ -75,108 +92,123 @@ public class PlayerDefending : MonoBehaviour
         }
 
         BallState state = possession != null ? possession.State : BallState.Loose;
-        if (state == BallState.WithMe)
-        {
-            SetAssist(Vector3.zero);
-            return;
-        }
+        if (state == BallState.WithMe) return;
 
-        if (input.DefendHeld) MatchUp();
-        else SetAssist(Vector3.zero);
-
-        if (input.TacklePressed && Time.time >= nextTackleTime)
-            StartSlide();
+        if (input.TacklePressed && Time.time >= nextTackleTime) StartSlide();
+        else if (input.DefendHeld) TryIntercept();
     }
 
-    // ---------------------------------------------------------------- match-up
+    // ---------------------------------------------------------------- Defend: intercept
 
-    private void MatchUp()
+    private void TryIntercept()
     {
-        if (ballBody == null || ballOwnership == null || mover == null) return;
+        if (ballOwnership.Holder != null) return;     // only a loose ball (a pass or a shot in flight)
 
-        PlayerTeam holder = ballOwnership.Holder;
-        bool chasingCarrier = holder != null && team != null && holder.Team != team.Team;
+        Vector3 toBall = ballBody.position - transform.position;
+        if (ballBody.position.y > interceptMaxHeight) return;
+        toBall.y = 0f;
+        if (toBall.magnitude > interceptReach) return;
+        if (ballBody.linearVelocity.magnitude > interceptMaxBallSpeed) return;
 
-        Vector3 focus = chasingCarrier ? holder.transform.position : ballBody.position;
-        Vector3 toFocus = focus - transform.position;
-        toFocus.y = 0f;
-        float distance = toFocus.magnitude;
-        if (distance < 0.01f)
-        {
-            SetAssist(Vector3.zero);
-            return;
-        }
-
-        // Close in, then hold a short distance from a carrier; go right up to a loose ball
-        float holdDistance = chasingCarrier ? matchUpDistance : 0.8f;
-        if (distance > holdDistance)
-            SetAssist(toFocus / distance * (mover.MoveSpeed * matchUpSpeedFactor));
-        else
-            SetAssist(Vector3.zero);
-
-        // Turn to face them
-        float targetYaw = Mathf.Atan2(toFocus.x, toFocus.z) * Mathf.Rad2Deg;
-        float newYaw = Mathf.MoveTowardsAngle(transform.eulerAngles.y, targetYaw, matchUpTurnSpeed * Time.deltaTime);
-        transform.rotation = Quaternion.Euler(0f, newYaw, 0f);
+        ballOwnership.Possess(team);
+        StretchStarted?.Invoke();
+        BallWon?.Invoke();
     }
 
-    private void SetAssist(Vector3 velocity)
-    {
-        if (mover != null) mover.AssistVelocity = velocity;
-    }
-
-    // ---------------------------------------------------------------- tackle
+    // ---------------------------------------------------------------- Tackle: slide at the opponent
 
     private void StartSlide()
     {
-        SetAssist(Vector3.zero);
+        PlayerTeam holder = ballOwnership.Holder;
+        slideCarrier = null;
+        Vector3 targetPosition;
 
-        slideDirection = transform.forward;
-        slideDirection.y = 0f;
-        slideDirection.Normalize();
+        if (holder == null)
+        {
+            targetPosition = ballBody.position;                 // loose ball: slide to it
+        }
+        else if (holder.Team != team.Team)
+        {
+            slideCarrier = holder;                              // opponent with the ball: slide at them
+            targetPosition = holder.transform.position;
+        }
+        else
+        {
+            return;                                             // a teammate has it: nothing to tackle
+        }
 
-        slideTimeLeft = slideSeconds;
+        Vector3 to = targetPosition - transform.position;
+        to.y = 0f;
+        float distance = to.magnitude;
+        if (distance > tackleSeekRange) return;                 // nobody close enough to slide at
+
+        slideTimeLeft = Mathf.Clamp((distance + 1f) / slideSpeed, 0.25f, maxSlideSeconds);
         nextTackleTime = Time.time + tackleCooldown;
-        tackleResolved = false;
-        // Play your slide animation here when the 3D model is added
+        slideResolved = false;
+
+        if (mover != null) mover.SpeedMultiplier = 0f;          // no walking while sliding
+        FaceTowards(to);
+        SlideStarted?.Invoke();
     }
 
     private void Slide()
     {
-        float speed = slideDistance / Mathf.Max(0.05f, slideSeconds);
-        controller.Move(slideDirection * speed * Time.deltaTime);
+        // If the carrier lost the ball (kicked it or got tackled), chase the ball instead
+        if (slideCarrier != null && ballOwnership.Holder != slideCarrier) slideCarrier = null;
+
+        Vector3 targetPosition = slideCarrier != null ? slideCarrier.transform.position : ballBody.position;
+        Vector3 to = targetPosition - transform.position;
+        to.y = 0f;
+        FaceTowards(to);
+
+        controller.Move(transform.forward * slideSpeed * Time.deltaTime);
         slideTimeLeft -= Time.deltaTime;
 
-        if (!tackleResolved) TryWinBall();
+        if (!slideResolved) TryCapture();
+
+        if (slideResolved || slideTimeLeft <= 0f) EndSlide();
     }
 
-    private void TryWinBall()
+    private void TryCapture()
     {
-        if (ballOwnership == null || ballBody == null || team == null) return;
+        Vector3 toBall = ballBody.position - transform.position;
+        toBall.y = 0f;
+        float nearest = toBall.magnitude;
 
-        PlayerTeam holder = ballOwnership.Holder;
-        if (holder == team)
+        if (slideCarrier != null)
         {
-            tackleResolved = true;
-            return;
+            Vector3 toCarrier = slideCarrier.transform.position - transform.position;
+            toCarrier.y = 0f;
+            nearest = Mathf.Min(nearest, toCarrier.magnitude);
         }
 
-        Vector3 targetPos = holder != null ? holder.transform.position : ballBody.position;
-        Vector3 to = targetPos - transform.position;
-        to.y = 0f;
-        float distance = to.magnitude;
-        if (distance > tackleReach || distance < 0.01f) return;
-        if (Vector3.Dot(slideDirection, to / distance) < 0.2f) return;
+        if (nearest > captureReach) return;
 
-        tackleResolved = true;
+        slideResolved = true;
+        if (slideCarrier != null)
+        {
+            if (Random.value <= tackleSuccessChance && ballOwnership.TryTackle(team))
+                BallWon?.Invoke();
+        }
+        else
+        {
+            ballOwnership.Possess(team);
+            BallWon?.Invoke();
+        }
+    }
 
-        if (holder == null)
-        {
-            ballOwnership.Possess(team);      // loose ball: slide in and win it
-        }
-        else if (holder.Team != team.Team && Random.value <= tackleSuccessChance)
-        {
-            ballOwnership.TryTackle(team);    // snatch it from the opponent
-        }
+    private void EndSlide()
+    {
+        slideTimeLeft = 0f;
+        slideCarrier = null;
+        if (mover != null) mover.SpeedMultiplier = 1f;
+        SlideEnded?.Invoke();
+    }
+
+    private void FaceTowards(Vector3 flatDirection)
+    {
+        flatDirection.y = 0f;
+        if (flatDirection.sqrMagnitude < 0.0001f) return;
+        transform.rotation = Quaternion.LookRotation(flatDirection.normalized, Vector3.up);
     }
 }

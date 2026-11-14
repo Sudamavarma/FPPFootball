@@ -2,12 +2,16 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Marks a goal so shots, clears and bots know where the goals are.
-/// Place the object at the CENTRE OF THE GOAL LINE on the ground. Its red arrow (local X) should run
-/// along the goal mouth. Width and Height are the size of the opening in metres.
-/// Defended By = which team defends this goal (the other team shoots at it).
+/// Marks a goal: where it is, how big it is, and which team defends it.
 ///
-/// This is only a marker (no collider). Real goal frames and scoring come later.
+/// Place the object at the CENTRE OF THE GOAL LINE on the ground.
+///   - Local X (red arrow) runs along the goal mouth.
+///   - Local Z (blue arrow) points BEHIND the goal, out of the pitch.
+/// "Build Goals And Scoreboard" sets the rotation for you.
+///
+/// MatchManager counts a goal when the ball is inside the goal volume (past the line, between the posts,
+/// under the bar), whether it was shot in or carried in.
+/// Defended By = which team defends this goal (the other team scores in it).
 /// </summary>
 public class GoalMarker : MonoBehaviour
 {
@@ -16,10 +20,13 @@ public class GoalMarker : MonoBehaviour
     [SerializeField] private TeamId defendedBy = TeamId.Away;
     [SerializeField] private float width = 6f;
     [SerializeField] private float height = 2.2f;
+    [Tooltip("How deep the net is behind the goal line (metres).")]
+    [SerializeField] private float depth = 1.8f;
 
     public TeamId DefendedBy => defendedBy;
     public float Width => width;
     public float Height => height;
+    public float Depth => depth;
 
     private void OnEnable()
     {
@@ -47,12 +54,21 @@ public class GoalMarker : MonoBehaviour
         return null;
     }
 
+    /// <summary>True if this point (the ball's centre) is inside the goal: over the line, between the posts, under the bar.</summary>
+    public bool ContainsPoint(Vector3 worldPoint)
+    {
+        Vector3 local = transform.InverseTransformPoint(worldPoint);
+        return Mathf.Abs(local.x) <= width * 0.5f
+               && local.y >= -0.2f && local.y <= height
+               && local.z >= 0.15f && local.z <= depth + 0.6f;
+    }
+
     private void OnDrawGizmos()
     {
         Gizmos.color = defendedBy == TeamId.Home ? new Color(0.2f, 0.5f, 1f) : new Color(1f, 0.3f, 0.2f);
         Matrix4x4 old = Gizmos.matrix;
-        Gizmos.matrix = Matrix4x4.TRS(transform.position + Vector3.up * (height * 0.5f), transform.rotation, Vector3.one);
-        Gizmos.DrawWireCube(Vector3.zero, new Vector3(width, height, 0.1f));
+        Gizmos.matrix = Matrix4x4.TRS(transform.position, transform.rotation, Vector3.one);
+        Gizmos.DrawWireCube(new Vector3(0f, height * 0.5f, depth * 0.5f), new Vector3(width, height, depth));
         Gizmos.matrix = old;
     }
 }

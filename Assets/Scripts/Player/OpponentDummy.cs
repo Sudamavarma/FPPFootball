@@ -28,6 +28,11 @@ public class OpponentDummy : MonoBehaviour
     [SerializeField] private float shootSpeed = 16f;
     [SerializeField] private float shootCooldown = 2f;
 
+    [Header("Passing (so you can test Defend: intercepting a pass)")]
+    [Tooltip("Needs a second opponent in the scene (FPPFootball > Add Second Opponent).")]
+    [SerializeField] private bool passToTeammates = true;
+    [SerializeField] private float passInterval = 3.5f;
+
     [Header("Tackling you")]
     [Tooltip("Untick to stop the opponent from ever tackling you.")]
     [SerializeField] private bool canTackle = true;
@@ -43,6 +48,7 @@ public class OpponentDummy : MonoBehaviour
     private float verticalVelocity;
     private float nextShootTime;
     private float nextTackleTime;
+    private float nextPassTime;
 
     private void Awake()
     {
@@ -107,18 +113,21 @@ public class OpponentDummy : MonoBehaviour
 
         controller.Move((direction * speed + Vector3.up * verticalVelocity) * Time.deltaTime);
 
-        if (iHaveBall) TryShoot();
+        if (iHaveBall)
+        {
+            if (!TryShoot()) TryPass();
+        }
         else if (holder != null) TryTackle(holder);
     }
 
-    private void TryShoot()
+    private bool TryShoot()
     {
-        if (Time.time < nextShootTime) return;
+        if (Time.time < nextShootTime) return false;
 
         Vector3 goal = GoalPosition();
         Vector3 flat = goal - ballBody.position;
         flat.y = 0f;
-        if (flat.magnitude > shootRange) return;
+        if (flat.magnitude > shootRange) return false;
 
         // Aim a little off-centre so it is not a perfect shot
         Vector3 right = Vector3.Cross(Vector3.up, flat.normalized);
@@ -129,6 +138,37 @@ public class OpponentDummy : MonoBehaviour
         Vector3 velocity = direction.normalized * shootSpeed + Vector3.up * 2.5f;
         ballOwnership.Strike(team, velocity);
         nextShootTime = Time.time + shootCooldown;
+        return true;
+    }
+
+    // Pass to the nearest teammate (another opponent), so the ball travels through the air for you to intercept
+    private void TryPass()
+    {
+        if (!passToTeammates || Time.time < nextPassTime) return;
+
+        PlayerTeam mate = null;
+        float best = float.MaxValue;
+        foreach (PlayerTeam p in PlayerTeam.All)
+        {
+            if (p == team || p.Team != team.Team || !p.CanPossess) continue;
+
+            Vector3 to = p.transform.position - transform.position;
+            to.y = 0f;
+            float distance = to.magnitude;
+            if (distance < 4f || distance > 22f) continue;
+            if (distance < best)
+            {
+                best = distance;
+                mate = p;
+            }
+        }
+        if (mate == null) return;
+
+        Vector3 direction = mate.transform.position - ballBody.position;
+        direction.y = 0f;
+        float speed = Mathf.Clamp(best * 1.5f, 7f, 16f);
+        ballOwnership.Strike(team, direction.normalized * speed + Vector3.up * 0.3f);
+        nextPassTime = Time.time + passInterval;
     }
 
     private void TryTackle(PlayerTeam holder)

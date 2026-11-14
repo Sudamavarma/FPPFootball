@@ -1,13 +1,18 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+/// <summary>Actions that the on-screen action buttons can trigger directly.</summary>
+public enum TouchAction { None = 0, Shoot, Pass, Through, Tackle, Defend, Clear }
+
 /// <summary>
-/// The one place that reads player input. Keyboard, mouse, gamepad and the
-/// on-screen touch controls all end up here, so other scripts never touch devices directly.
+/// The one place that reads player input. Keyboard, mouse, gamepad and the touch controls
+/// all end up here, so other scripts never touch devices directly.
 ///
-/// On-screen buttons (On-Screen Button) create a virtual Gamepad, so each one works
-/// through one "&lt;Gamepad&gt;" binding below. The look area and the spectate slider are
-/// custom UI scripts that this script finds automatically.
+/// Touch controls:
+///  - TouchActionButton (the smart action buttons) call SetTouchAction directly.
+///  - FloatingJoystick calls SetTouchMove directly.
+///  - The Sprint button still uses an On-Screen Button (virtual gamepad).
+///  - The look area and the spectate slider are custom UI scripts this script finds automatically.
 ///
 /// Attach to: the Player GameObject (same one as FPPPlayerController).
 /// </summary>
@@ -28,18 +33,49 @@ public class PlayerInputReader : MonoBehaviour
     private InputAction spectateAction;
     private InputAction[] allActions;
 
+    // Written by the touch UI
+    private const int TouchActionCount = 7;
+    private readonly bool[] touchHeld = new bool[TouchActionCount];
+    private readonly bool[] touchPressedLatch = new bool[TouchActionCount];
+    private Vector2 touchMove;
+
+    /// <summary>Called by TouchActionButton when a finger goes down (true) or lifts (false).</summary>
+    public void SetTouchAction(TouchAction action, bool down)
+    {
+        int i = (int)action;
+        if (i <= 0 || i >= TouchActionCount) return;
+        if (down && !touchHeld[i]) touchPressedLatch[i] = true;
+        touchHeld[i] = down;
+    }
+
+    /// <summary>Called by the FloatingJoystick. x = strafe, y = forward/back, length 0 to 1.</summary>
+    public void SetTouchMove(Vector2 value)
+    {
+        touchMove = Vector2.ClampMagnitude(value, 1f);
+    }
+
+    private bool TouchPressed(TouchAction a) { return touchPressedLatch[(int)a]; }
+    private bool TouchHeld(TouchAction a) { return touchHeld[(int)a]; }
+
     /// <summary>Movement: x = strafe, y = forward/back.</summary>
-    public Vector2 Move => moveAction.ReadValue<Vector2>();
+    public Vector2 Move
+    {
+        get
+        {
+            Vector2 m = moveAction.ReadValue<Vector2>();
+            return touchMove.sqrMagnitude > m.sqrMagnitude ? touchMove : m;
+        }
+    }
 
-    // Attacking buttons
-    public bool ShootPressed => shootAction.WasPressedThisFrame();
-    public bool PassPressed => passAction.WasPressedThisFrame();
-    public bool ThroughPressed => throughAction.WasPressedThisFrame();
+    // Ball with me
+    public bool ShootPressed => shootAction.WasPressedThisFrame() || TouchPressed(TouchAction.Shoot);
+    public bool PassPressed => passAction.WasPressedThisFrame() || TouchPressed(TouchAction.Pass);
+    public bool ThroughPressed => throughAction.WasPressedThisFrame() || TouchPressed(TouchAction.Through);
 
-    // Defending buttons
-    public bool TacklePressed => tackleAction.WasPressedThisFrame();
-    public bool DefendHeld => defendAction.IsPressed();
-    public bool ClearPressed => clearAction.WasPressedThisFrame();
+    // Ball loose or with an opponent
+    public bool TacklePressed => tackleAction.WasPressedThisFrame() || TouchPressed(TouchAction.Tackle);
+    public bool DefendHeld => defendAction.IsPressed() || TouchHeld(TouchAction.Defend);
+    public bool ClearPressed => clearAction.WasPressedThisFrame() || TouchPressed(TouchAction.Clear);
 
     // Always available
     public bool SprintHeld => sprintAction.IsPressed();
@@ -82,7 +118,7 @@ public class PlayerInputReader : MonoBehaviour
             .With("Right", "<Keyboard>/d");
         moveAction.AddBinding("<Gamepad>/leftStick");
 
-        // keyboard key, extra desktop binding, virtual/real gamepad button (used by the on-screen buttons)
+        // keyboard key, extra desktop binding, virtual/real gamepad button
         shootAction = CreateButton("Shoot", "<Keyboard>/f", "<Mouse>/rightButton", "<Gamepad>/buttonSouth");
         passAction = CreateButton("Pass", "<Keyboard>/e", "<Gamepad>/buttonEast");
         throughAction = CreateButton("Through", "<Keyboard>/r", "<Gamepad>/buttonNorth");
@@ -119,6 +155,18 @@ public class PlayerInputReader : MonoBehaviour
     private void OnDisable()
     {
         foreach (InputAction a in allActions) a.Disable();
+        for (int i = 0; i < TouchActionCount; i++)
+        {
+            touchHeld[i] = false;
+            touchPressedLatch[i] = false;
+        }
+        touchMove = Vector2.zero;
+    }
+
+    private void LateUpdate()
+    {
+        // A tap counts as "pressed" for the rest of the frame it arrived in
+        for (int i = 0; i < TouchActionCount; i++) touchPressedLatch[i] = false;
     }
 
     private void OnDestroy()
