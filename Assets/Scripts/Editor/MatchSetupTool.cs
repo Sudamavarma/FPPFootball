@@ -49,8 +49,8 @@ public static class MatchSetupTool
         Ensure<BallOwnership>(ball);
 
         // ---- Goal markers (the player attacks +Z, the opponent attacks -Z) ----
-        MakeGoal("Goal_Away", new Vector3(0f, 0f, 19f), TeamId.Away);
-        MakeGoal("Goal_Home", new Vector3(0f, 0f, -19f), TeamId.Home);
+        MakeGoal("Goal_Away", new Vector3(0f, 0f, 18f), TeamId.Away);
+        MakeGoal("Goal_Home", new Vector3(0f, 0f, -18f), TeamId.Home);
 
         // ---- Opponent ----
         GameObject opponent = GameObject.Find("Opponent");
@@ -69,6 +69,32 @@ public static class MatchSetupTool
         EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
         AssetDatabase.SaveAssets();
         Debug.Log("Possession, goal markers and opponent set up. Press Ctrl+S to save the scene.");
+    }
+
+    [MenuItem("FPPFootball/Add Second Opponent")]
+    public static void AddSecondOpponent()
+    {
+        if (GameObject.Find("Ball") == null)
+        {
+            EditorUtility.DisplayDialog("FPPFootball", "Open your pitch scene first (no 'Ball' found).", "OK");
+            return;
+        }
+
+        GameObject opponent = GameObject.Find("Opponent_2");
+        if (opponent == null)
+        {
+            opponent = MakeCapsule("Opponent_2", new Vector3(-7f, 1f, 11f), "Opponent_Red", new Color(0.8f, 0.1f, 0.1f));
+        }
+        SetupCharacter(opponent);
+
+        PlayerTeam opponentTeam = Ensure<PlayerTeam>(opponent);
+        SetEnum(opponentTeam, "team", (int)TeamId.Away);
+        OpponentDummy dummy = Ensure<OpponentDummy>(opponent);
+        GameObject homeGoal = GameObject.Find("Goal_Home");
+        if (homeGoal != null) SetRefIfEmpty(dummy, "goalTarget", homeGoal.transform);
+
+        EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+        Debug.Log("Second opponent added. The two opponents now pass to each other. Press Ctrl+S to save the scene.");
     }
 
     [MenuItem("FPPFootball/Add Test Teammate")]
@@ -128,6 +154,8 @@ public static class MatchSetupTool
             go = new GameObject(name);
             Undo.RegisterCreatedObjectUndo(go, "Create " + name);
             go.transform.position = position;
+            // local +Z must point out of the pitch, behind the goal
+            go.transform.rotation = position.z >= 0f ? Quaternion.identity : Quaternion.Euler(0f, 180f, 0f);
         }
         GoalMarker marker = Ensure<GoalMarker>(go);
         SetEnum(marker, "defendedBy", (int)defendedBy);

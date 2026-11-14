@@ -95,6 +95,17 @@ public class BallOwnership : MonoBehaviour
         return true;
     }
 
+    /// <summary>Put the ball back at a spot, stopped and loose (used for kickoff after a goal).</summary>
+    public void ResetTo(Vector3 position)
+    {
+        ReleaseInternal();
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        body.position = position;
+        transform.position = position;
+        lockedPlayer = null;
+    }
+
     private void Lock(PlayerTeam player, float seconds)
     {
         lockedPlayer = player;
